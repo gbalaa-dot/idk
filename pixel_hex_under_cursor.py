@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print the hex color code of the pixel currently under the cursor (X11)."""
+"""Print the hex color code of the pixel currently under the cursor."""
 
 from __future__ import annotations
 
@@ -9,6 +9,9 @@ from dataclasses import dataclass
 import os
 import sys
 import time
+from typing import Protocol
+
+IS_WINDOWS = sys.platform.startswith("win")
 
 
 @dataclass(frozen=True)
@@ -29,12 +32,33 @@ def clamp_channel(value: int) -> int:
     return max(0, min(255, value))
 
 
-def rgb_from_pixel(pixel_value: int) -> RGB:
+def rgb_from_x11_pixel(pixel_value: int) -> RGB:
     """Extract RGB channels from an X11 pixel value."""
     r = clamp_channel((pixel_value >> 16) & 0xFF)
     g = clamp_channel((pixel_value >> 8) & 0xFF)
     b = clamp_channel(pixel_value & 0xFF)
     return RGB(r, g, b)
+
+
+def rgb_from_windows_colorref(colorref: int) -> RGB:
+    """Extract RGB channels from a Windows COLORREF (0x00bbggrr)."""
+    r = clamp_channel(colorref & 0xFF)
+    g = clamp_channel((colorref >> 8) & 0xFF)
+    b = clamp_channel((colorref >> 16) & 0xFF)
+    return RGB(r, g, b)
+
+
+class PixelReader(Protocol):
+    """Protocol describing the behavior required by the main loop."""
+
+    def close(self) -> None:
+        """Release any OS resources held by the reader."""
+
+    def get_cursor_position(self) -> tuple[int, int]:
+        """Return cursor coordinates relative to the desktop."""
+
+    def get_pixel(self, x: int, y: int) -> RGB:
+        """Read the pixel at the given coordinates."""
 
 
 class X11PixelReader:
@@ -146,12 +170,72 @@ class X11PixelReader:
             self.x11.XDestroyImage(image)
             self.x11.XFlush(self.display)
 
-        return rgb_from_pixel(pixel_value)
+        return rgb_from_x11_pixel(pixel_value)
+
+
+class POINT(ctypes.Structure):
+    """Win32 POINT structure."""
+
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class WindowsPixelReader:
+    """Read pixels and cursor position using Win32 APIs."""
+
+    CLR_INVALID = 0xFFFFFFFF
+
+    def __init__(self) -> None:
+        self.user32 = ctypes.windll.user32
+        self.gdi32 = ctypes.windll.gdi32
+
+        self.user32.GetCursorPos.argtypes = [ctypes.POINTER(POINT)]
+        self.user32.GetCursorPos.restype = ctypes.c_bool
+        self.user32.GetDC.argtypes = [ctypes.c_void_p]
+        self.user32.GetDC.restype = ctypes.c_void_p
+        self.user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.user32.ReleaseDC.restype = ctypes.c_int
+
+        self.gdi32.GetPixel.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+        self.gdi32.GetPixel.restype = ctypes.c_uint
+
+        self.hdc = self.user32.GetDC(None)
+        if not self.hdc:
+            raise RuntimeError("Unable to acquire the desktop device context.")
+
+    def close(self) -> None:
+        """Release the device context."""
+        if getattr(self, "hdc", None):
+            self.user32.ReleaseDC(None, self.hdc)
+            self.hdc = None
+
+    def get_cursor_position(self) -> tuple[int, int]:
+        """Return the cursor coordinates relative to the desktop."""
+        point = POINT()
+        if not self.user32.GetCursorPos(ctypes.byref(point)):
+            raise RuntimeError("GetCursorPos failed.")
+        return int(point.x), int(point.y)
+
+    def get_pixel(self, x: int, y: int) -> RGB:
+        """Read the pixel at the given coordinates."""
+        colorref = int(self.gdi32.GetPixel(self.hdc, x, y))
+        if colorref == self.CLR_INVALID:
+            raise RuntimeError("GetPixel failed.")
+        return rgb_from_windows_colorref(colorref)
+
+
+def create_reader() -> PixelReader:
+    """Create the appropriate reader for the current platform."""
+    if IS_WINDOWS:
+        return WindowsPixelReader()
+    return X11PixelReader()
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Print the hex color code of the pixel under the mouse cursor (X11)."
+        description=(
+            "Print the hex color code of the pixel under the mouse cursor "
+            "(Windows and X11)."
+        )
     )
     parser.add_argument(
         "--interval",
@@ -173,7 +257,7 @@ def format_output(x: int, y: int, color: RGB) -> str:
 
 
 def run(interval: float, once: bool) -> int:
-    reader = X11PixelReader()
+    reader = create_reader()
     try:
         while True:
             x, y = reader.get_cursor_position()
