@@ -1,11 +1,17 @@
 # Pixel hex under cursor (Windows 10/11)
 
-This repository provides a small Python CLI that prints the hex color code of the pixel currently under your mouse cursor using native Win32 APIs via `ctypes`.
+This repository provides a small Python app that detects the pixel under your mouse cursor and shows:
+
+* the hex color code,
+* a general color name (red/green/blue/etc.), and
+* a live color swatch.
+
+It uses native Win32 APIs via `ctypes`.
 
 ## Requirements
 
 * Windows 10/11.
-* Python 3.10+.
+* Python 3.10+ with Tkinter available (standard CPython installer includes it).
 
 No third-party Python packages are required.
 
@@ -34,16 +40,33 @@ Create a new file named `pixel_hex_under_cursor.py` and paste the contents from 
 
 ## Usage
 
+### GUI mode (default)
+
 From the repository root:
 
 ```powershell
 python pixel_hex_under_cursor.py
 ```
 
+The GUI includes:
+
+* a hex label whose text color matches the detected color,
+* a general color label,
+* a square swatch showing the current color, and
+* **Start** / **Stop** buttons.
+
+### CLI mode
+
+Run in terminal-only mode:
+
+```powershell
+python pixel_hex_under_cursor.py --cli
+```
+
 Sample once and exit:
 
 ```powershell
-python pixel_hex_under_cursor.py --once
+python pixel_hex_under_cursor.py --once --cli
 ```
 
 Adjust the polling interval (seconds):

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import colorsys
 import ctypes
 from dataclasses import dataclass
 import sys
@@ -45,6 +46,38 @@ def rgb_from_windows_colorref(colorref: int) -> RGB:
     g = clamp_channel((colorref >> 8) & 0xFF)
     b = clamp_channel((colorref >> 16) & 0xFF)
     return RGB(r, g, b)
+
+
+def classify_color(color: RGB) -> str:
+    """Return a human-friendly color name based on HSV ranges."""
+    r, g, b = (channel / 255.0 for channel in (color.r, color.g, color.b))
+    hue, saturation, value = colorsys.rgb_to_hsv(r, g, b)
+    hue_deg = hue * 360.0
+
+    if value < 0.12:
+        return "black"
+    if saturation < 0.12:
+        if value > 0.9:
+            return "white"
+        return "gray"
+
+    if hue_deg < 15 or hue_deg >= 345:
+        return "red"
+    if hue_deg < 45:
+        return "orange"
+    if hue_deg < 70:
+        return "yellow"
+    if hue_deg < 160:
+        return "green"
+    if hue_deg < 200:
+        return "cyan"
+    if hue_deg < 255:
+        return "blue"
+    if hue_deg < 290:
+        return "purple"
+    if hue_deg < 345:
+        return "magenta"
+    return "red"
 
 
 class PixelReader(Protocol):
@@ -140,15 +173,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Sample once and exit.",
     )
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="Run in CLI mode (prints to stdout) instead of launching the GUI.",
+    )
     return parser.parse_args(argv)
 
 
 def format_output(x: int, y: int, color: RGB) -> str:
     """Format a single output line."""
-    return f"x={x:4d} y={y:4d} rgb=({color.r:3d},{color.g:3d},{color.b:3d}) hex={color.to_hex()}"
+    color_name = classify_color(color)
+    return (
+        f"x={x:4d} y={y:4d} rgb=({color.r:3d},{color.g:3d},{color.b:3d}) "
+        f"hex={color.to_hex()} color={color_name}"
+    )
 
 
-def run(interval: float, once: bool) -> int:
+def run_cli(interval: float, once: bool) -> int:
+    """Run the CLI polling loop."""
     reader = create_reader()
     try:
         while True:
@@ -162,9 +205,95 @@ def run(interval: float, once: bool) -> int:
         reader.close()
 
 
+def run_gui(interval: float) -> int:
+    """Launch a small Tkinter GUI for live sampling."""
+    import tkinter as tk
+    from tkinter import ttk
+
+    reader = create_reader()
+    interval_ms = max(10, int(interval * 1000))
+
+    root = tk.Tk()
+    root.title("Pixel Hex Under Cursor")
+    root.resizable(False, False)
+
+    padding = {"padx": 12, "pady": 8}
+
+    hex_label = ttk.Label(root, text="#000000", font=("Segoe UI", 20, "bold"))
+    hex_label.grid(row=0, column=0, columnspan=2, **padding)
+
+    color_name_label = ttk.Label(root, text="color: unknown", font=("Segoe UI", 12))
+    color_name_label.grid(row=1, column=0, columnspan=2, **padding)
+
+    swatch = tk.Canvas(root, width=120, height=120, highlightthickness=1)
+    swatch.grid(row=2, column=0, columnspan=2, padx=12, pady=10)
+    swatch_rect = swatch.create_rectangle(0, 0, 120, 120, fill="#000000", outline="")
+
+    status_var = tk.StringVar(value="stopped")
+    status_label = ttk.Label(root, textvariable=status_var)
+    status_label.grid(row=3, column=0, columnspan=2, **padding)
+
+    is_running = False
+    after_id: str | None = None
+
+    def apply_color(color: RGB) -> None:
+        color_hex = color.to_hex()
+        color_name = classify_color(color)
+        hex_label.configure(text=color_hex, foreground=color_hex)
+        color_name_label.configure(text=f"color: {color_name}")
+        swatch.itemconfigure(swatch_rect, fill=color_hex)
+
+    def sample_once() -> None:
+        nonlocal after_id
+        x, y = reader.get_cursor_position()
+        color = reader.get_pixel(x, y)
+        apply_color(color)
+        status_var.set(f"running at x={x} y={y}")
+        if is_running:
+            after_id = root.after(interval_ms, sample_once)
+        else:
+            after_id = None
+
+    def start() -> None:
+        nonlocal is_running
+        if is_running:
+            return
+        is_running = True
+        status_var.set("running")
+        sample_once()
+
+    def stop() -> None:
+        nonlocal is_running, after_id
+        is_running = False
+        status_var.set("stopped")
+        if after_id is not None:
+            root.after_cancel(after_id)
+            after_id = None
+
+    def on_close() -> None:
+        stop()
+        reader.close()
+        root.destroy()
+
+    start_button = ttk.Button(root, text="Start", command=start)
+    start_button.grid(row=4, column=0, padx=12, pady=(4, 12), sticky="ew")
+
+    stop_button = ttk.Button(root, text="Stop", command=stop)
+    stop_button.grid(row=4, column=1, padx=12, pady=(4, 12), sticky="ew")
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+
+    start()
+    root.mainloop()
+
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
-    return run(args.interval, args.once)
+    if args.cli or args.once:
+        return run_cli(args.interval, args.once)
+    return run_gui(args.interval)
 
 
 if __name__ == "__main__":

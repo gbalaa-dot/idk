@@ -3,6 +3,7 @@ import unittest
 from pixel_hex_under_cursor import (
     RGB,
     clamp_channel,
+    classify_color,
     format_output,
     rgb_from_windows_colorref,
     rgb_from_x11_pixel,
@@ -27,11 +28,19 @@ class PixelHexTests(unittest.TestCase):
         color = rgb_from_windows_colorref(0x00_33_22_11)
         self.assertEqual(color, RGB(0x11, 0x22, 0x33))
 
-    def test_format_output_contains_hex_and_coords(self) -> None:
-        line = format_output(10, 20, RGB(1, 2, 3))
+    def test_classify_color_basic_ranges(self) -> None:
+        self.assertEqual(classify_color(RGB(255, 0, 0)), "red")
+        self.assertEqual(classify_color(RGB(0, 255, 0)), "green")
+        self.assertEqual(classify_color(RGB(0, 0, 255)), "blue")
+        self.assertEqual(classify_color(RGB(255, 255, 255)), "white")
+        self.assertEqual(classify_color(RGB(10, 10, 10)), "black")
+
+    def test_format_output_contains_hex_coords_and_color_name(self) -> None:
+        line = format_output(10, 20, RGB(255, 0, 0))
         self.assertIn("x=  10", line)
         self.assertIn("y=  20", line)
-        self.assertIn("hex=#010203", line)
+        self.assertIn("hex=#ff0000", line)
+        self.assertIn("color=red", line)
 
 
 if __name__ == "__main__":
