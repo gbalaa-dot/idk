@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import ctypes
 from dataclasses import dataclass
-import os
 import sys
 import time
 from typing import Protocol
@@ -33,7 +32,7 @@ def clamp_channel(value: int) -> int:
 
 
 def rgb_from_x11_pixel(pixel_value: int) -> RGB:
-    """Extract RGB channels from an X11 pixel value."""
+    """Extract RGB channels from a 0xRRGGBB-style pixel value."""
     r = clamp_channel((pixel_value >> 16) & 0xFF)
     g = clamp_channel((pixel_value >> 8) & 0xFF)
     b = clamp_channel(pixel_value & 0xFF)
@@ -61,118 +60,6 @@ class PixelReader(Protocol):
         """Read the pixel at the given coordinates."""
 
 
-class X11PixelReader:
-    """Read pixels and cursor position directly from the X11 server."""
-
-    def __init__(self) -> None:
-        if not os.environ.get("DISPLAY"):
-            raise RuntimeError("DISPLAY is not set. This tool requires an X11 session.")
-
-        self.x11 = ctypes.cdll.LoadLibrary("libX11.so.6")
-
-        self.x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
-        self.x11.XOpenDisplay.restype = ctypes.c_void_p
-        self.x11.XDefaultScreen.argtypes = [ctypes.c_void_p]
-        self.x11.XDefaultScreen.restype = ctypes.c_int
-        self.x11.XRootWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        self.x11.XRootWindow.restype = ctypes.c_ulong
-        self.x11.XQueryPointer.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_ulong,
-            ctypes.POINTER(ctypes.c_ulong),
-            ctypes.POINTER(ctypes.c_ulong),
-            ctypes.POINTER(ctypes.c_int),
-            ctypes.POINTER(ctypes.c_int),
-            ctypes.POINTER(ctypes.c_int),
-            ctypes.POINTER(ctypes.c_int),
-            ctypes.POINTER(ctypes.c_uint),
-        ]
-        self.x11.XQueryPointer.restype = ctypes.c_bool
-        self.x11.XGetImage.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_ulong,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_uint,
-            ctypes.c_uint,
-            ctypes.c_ulong,
-            ctypes.c_int,
-        ]
-        self.x11.XGetImage.restype = ctypes.c_void_p
-        self.x11.XGetPixel.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
-        self.x11.XGetPixel.restype = ctypes.c_ulong
-        self.x11.XDestroyImage.argtypes = [ctypes.c_void_p]
-        self.x11.XDestroyImage.restype = ctypes.c_int
-        self.x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
-        self.x11.XCloseDisplay.restype = ctypes.c_int
-        self.x11.XFlush.argtypes = [ctypes.c_void_p]
-        self.x11.XFlush.restype = ctypes.c_int
-
-        self.display = self.x11.XOpenDisplay(None)
-        if not self.display:
-            raise RuntimeError("Unable to open X11 display. Are you running under X11?")
-
-        self.screen = self.x11.XDefaultScreen(self.display)
-        self.root_window = self.x11.XRootWindow(self.display, self.screen)
-
-    def close(self) -> None:
-        """Release the display connection."""
-        if getattr(self, "display", None):
-            self.x11.XCloseDisplay(self.display)
-            self.display = None
-
-    def get_cursor_position(self) -> tuple[int, int]:
-        """Return the cursor coordinates relative to the root window."""
-        root_return = ctypes.c_ulong()
-        child_return = ctypes.c_ulong()
-        root_x = ctypes.c_int()
-        root_y = ctypes.c_int()
-        win_x = ctypes.c_int()
-        win_y = ctypes.c_int()
-        mask_return = ctypes.c_uint()
-
-        success = self.x11.XQueryPointer(
-            self.display,
-            self.root_window,
-            ctypes.byref(root_return),
-            ctypes.byref(child_return),
-            ctypes.byref(root_x),
-            ctypes.byref(root_y),
-            ctypes.byref(win_x),
-            ctypes.byref(win_y),
-            ctypes.byref(mask_return),
-        )
-        if not success:
-            raise RuntimeError("XQueryPointer failed.")
-        return root_x.value, root_y.value
-
-    def get_pixel(self, x: int, y: int) -> RGB:
-        """Read the pixel at the given coordinates."""
-        all_planes = ctypes.c_ulong(~0).value
-        z_pixmap = 2
-
-        image = self.x11.XGetImage(
-            self.display,
-            self.root_window,
-            x,
-            y,
-            1,
-            1,
-            all_planes,
-            z_pixmap,
-        )
-        if not image:
-            raise RuntimeError("XGetImage failed.")
-
-        try:
-            pixel_value = int(self.x11.XGetPixel(image, 0, 0))
-        finally:
-            self.x11.XDestroyImage(image)
-            self.x11.XFlush(self.display)
-
-        return rgb_from_x11_pixel(pixel_value)
-
-
 class POINT(ctypes.Structure):
     """Win32 POINT structure."""
 
@@ -185,8 +72,11 @@ class WindowsPixelReader:
     CLR_INVALID = 0xFFFFFFFF
 
     def __init__(self) -> None:
-        self.user32 = ctypes.windll.user32
-        self.gdi32 = ctypes.windll.gdi32
+        if not IS_WINDOWS:
+            raise RuntimeError("WindowsPixelReader is only available on Windows.")
+
+        self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+        self.gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 
         self.user32.GetCursorPos.argtypes = [ctypes.POINTER(POINT)]
         self.user32.GetCursorPos.restype = ctypes.c_bool
@@ -227,14 +117,16 @@ def create_reader() -> PixelReader:
     """Create the appropriate reader for the current platform."""
     if IS_WINDOWS:
         return WindowsPixelReader()
-    return X11PixelReader()
+    raise RuntimeError(
+        f"Unsupported platform '{sys.platform}'. This script runs on Windows 10/11 only."
+    )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Print the hex color code of the pixel under the mouse cursor "
-            "(Windows and X11)."
+            "(Windows 10/11)."
         )
     )
     parser.add_argument(

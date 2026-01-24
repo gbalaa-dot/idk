@@ -1,11 +1,10 @@
-# Pixel hex under cursor (Windows + X11)
+# Pixel hex under cursor (Windows 10/11)
 
-This repository provides a small Python CLI that prints the hex color code of the pixel currently under your mouse cursor.
+This repository provides a small Python CLI that prints the hex color code of the pixel currently under your mouse cursor using native Win32 APIs via `ctypes`.
 
 ## Requirements
 
-* **Windows 10/11** (uses Win32 APIs via `ctypes`), or
-* **Linux running an X11 session** (Wayland may require XWayland compatibility).
+* Windows 10/11.
 * Python 3.10+.
 
 No third-party Python packages are required.
@@ -14,16 +13,7 @@ No third-party Python packages are required.
 
 ### Option 1: download directly from a repo
 
-If this project is hosted on GitHub, you can download just the script.
-
-On macOS/Linux:
-
-```bash
-curl -o pixel_hex_under_cursor.py \
-  https://raw.githubusercontent.com/<OWNER>/<REPO>/<BRANCH>/pixel_hex_under_cursor.py
-```
-
-On Windows PowerShell:
+If this project is hosted on GitHub, you can download just the script using PowerShell:
 
 ```powershell
 Invoke-WebRequest \
@@ -46,27 +36,29 @@ Create a new file named `pixel_hex_under_cursor.py` and paste the contents from 
 
 From the repository root:
 
-```bash
-python3 pixel_hex_under_cursor.py
+```powershell
+python pixel_hex_under_cursor.py
 ```
 
 Sample once and exit:
 
-```bash
-python3 pixel_hex_under_cursor.py --once
+```powershell
+python pixel_hex_under_cursor.py --once
 ```
 
 Adjust the polling interval (seconds):
 
-```bash
-python3 pixel_hex_under_cursor.py --interval 0.1
+```powershell
+python pixel_hex_under_cursor.py --interval 0.1
 ```
 
-> On Windows, `python pixel_hex_under_cursor.py` also works if `python3` is not available.
+## Windows behavior
 
-## Notes
+The script calls native Windows APIs directly:
 
-The program uses `ctypes` to call native OS APIs directly:
+* `GetCursorPos` to read the cursor location.
+* `GetDC` to access the desktop device context.
+* `GetPixel` to read the pixel color.
+* `ReleaseDC` to clean up the device context.
 
-* **Windows**: `GetCursorPos` + `GetPixel`.
-* **X11**: `XQueryPointer` + `XGetImage`/`XGetPixel`.
+On non-Windows platforms, the script exits with a clear unsupported-platform error message.
