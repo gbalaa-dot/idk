@@ -1,0 +1,8 @@
+mode: websocket
+endpoint_url: ""
+poll_interval_seconds: 5
+database_path: data/crash_results.sqlite
+target_threshold: 2.0
+timezone: UTC
+headers: {}
+ws_subscribe_message: null
